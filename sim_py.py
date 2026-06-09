@@ -1,3 +1,20 @@
+"""
+SIM_PY.PY
+=========
+Pure Python implementation of a Neural Network for 8-bit Logic Gates.
+
+This script is a "zero-dependency" implementation (excluding standard libraries) 
+that recreates the entire neural network stack using only basic Python primitives.
+It is significantly slower than NumPy/Torch but highly educational for understanding
+the low-level mathematics of backpropagation.
+
+Includes:
+1. Manual Vector/Matrix Math (dot product, multiplication, transpose).
+2. Pure Python Neural Network Class.
+3. Training loop with per-sample updates.
+4. Support for importing weights from the NumPy version.
+"""
+
 import math
 import json
 import os
@@ -5,44 +22,68 @@ import random
 import time
 import sys
 
-# Define paths
+# --- PATH CONFIGURATION ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WEIGHTS_JSON = os.path.join(SCRIPT_DIR, 'py_weights.json')
 NPZ_PATH = os.path.join(SCRIPT_DIR, 'numpy_weights.npz')
 
-# 1. Pure Python Matrix & Vector Utilities
+# =============================================================================
+# 1. PURE PYTHON MATRIX & VECTOR UTILITIES
+# =============================================================================
+
 def dot_product(v1, v2):
+    """Calculates the scalar product of two vectors."""
     return sum(x * y for x, y in zip(v1, v2))
 
 def matrix_vector_mul(matrix, vector):
+    """Multiplies a matrix by a vector."""
     return [dot_product(row, vector) for row in matrix]
 
 def vector_add(v1, v2):
+    """Element-wise addition of two vectors."""
     return [x + y for x, y in zip(v1, v2)]
 
 def vector_sub(v1, v2):
+    """Element-wise subtraction of two vectors."""
     return [x - y for x, y in zip(v1, v2)]
 
 def matrix_transpose(matrix):
+    """Transposes a 2D list (matrix)."""
     return [list(row) for row in zip(*matrix)]
 
 def relu(vector):
+    """Applies ReLU activation element-wise to a vector."""
     return [max(0, x) for x in vector]
 
 def sigmoid(vector):
+    """Applies Sigmoid activation element-wise with clipping for stability."""
     return [1 / (1 + math.exp(-max(min(x, 50), -50))) for x in vector]
 
-# 2. Dataset Generation
+# =============================================================================
+# 2. DATASET GENERATION
+# =============================================================================
+
 def generate_data_py(num_samples):
+    """
+    Generates training data using only built-in random and basic math.
+    Returns: X (nested lists of bits), y (nested lists of bits).
+    """
     X, y = [], []
     for _ in range(num_samples):
+        # Random bits for A and B
         a_b = [random.randint(0, 1) for _ in range(8)]
         b_b = [random.randint(0, 1) for _ in range(8)]
+        # Random Operation Index (0-7)
         o_i = random.randint(0, 7)
         o_b = [int(c) for c in format(o_i, '03b')]
-        a, b = int("".join(map(str, a_b)), 2), int("".join(map(str, b_b)), 2)
+        
+        # Convert bits to integers for ground truth calculation
+        a = int("".join(map(str, a_b)), 2)
+        b = int("".join(map(str, b_b)), 2)
+        
+        # Determine Ground Truth
         res = 0
-        if o_i == 0: res = a & b
+        if o_i == 0:   res = a & b
         elif o_i == 1: res = a | b
         elif o_i == 2: res = a ^ b
         elif o_i == 3: res = ~(a & b) & 0xFF
@@ -50,69 +91,114 @@ def generate_data_py(num_samples):
         elif o_i == 5: res = ~(a ^ b) & 0xFF
         elif o_i == 6: res = (~a) & 0xFF
         elif o_i == 7: res = (~b) & 0xFF
+        
+        # Build the input vector [A bits] + [B bits] + [Op bits]
         X.append(a_b + b_b + o_b)
+        # Build the label [Result bits]
         y.append([int(c) for c in format(res, '08b')])
     return X, y
 
-# 3. Neural Network Class
+# =============================================================================
+# 3. NEURAL NETWORK CLASS (MLP)
+# =============================================================================
+
 class PurePythonMLP:
+    """
+    A 3-layer Multi-Layer Perceptron using only standard Python lists.
+    Architecture: 19 -> 128 -> 128 -> 8
+    """
     def __init__(self, input_size=19, hidden_size=128, output_size=8):
+        # He Initialization using random.gauss
         self.W1 = [[random.gauss(0, math.sqrt(2./input_size)) for _ in range(input_size)] for _ in range(hidden_size)]
         self.b1 = [0.0] * hidden_size
+        
         self.W2 = [[random.gauss(0, math.sqrt(2./hidden_size)) for _ in range(hidden_size)] for _ in range(hidden_size)]
         self.b2 = [0.0] * hidden_size
+        
+        # Xavier Initialization for the Sigmoid output layer
         self.W3 = [[random.gauss(0, math.sqrt(1./hidden_size)) for _ in range(hidden_size)] for _ in range(output_size)]
         self.b3 = [0.0] * output_size
 
     def forward(self, x):
+        """Standard Forward Pass."""
+        # Layer 1
         self.z1 = vector_add(matrix_vector_mul(self.W1, x), self.b1)
         self.a1 = relu(self.z1)
+        # Layer 2
         self.z2 = vector_add(matrix_vector_mul(self.W2, self.a1), self.b2)
         self.a2 = relu(self.z2)
+        # Layer 3 (Output)
         self.z3 = vector_add(matrix_vector_mul(self.W3, self.a2), self.b3)
         self.a3 = sigmoid(self.z3)
         return self.a3
 
     def train_step(self, x, y, lr):
+        """
+        Calculates gradients for a single sample and updates weights.
+        This is essentially Stochastic Gradient Descent with batch_size=1.
+        """
+        # Forward pass to cache activations
         output = self.forward(x)
+        
+        # 1. Output Layer Gradient (dz3 = predicted - actual)
         dz3 = vector_sub(output, y)
         dW3 = [[dz3[i] * self.a2[j] for j in range(len(self.a2))] for i in range(len(dz3))]
+        
+        # 2. Hidden Layer 2 Gradient
         da2 = matrix_vector_mul(matrix_transpose(self.W3), dz3)
         dz2 = [da2[i] * (1.0 if self.z2[i] > 0 else 0.0) for i in range(len(da2))]
         dW2 = [[dz2[i] * self.a1[j] for j in range(len(self.a1))] for i in range(len(dz2))]
+        
+        # 3. Hidden Layer 1 Gradient
         da1 = matrix_vector_mul(matrix_transpose(self.W2), dz2)
         dz1 = [da1[i] * (1.0 if self.z1[i] > 0 else 0.0) for i in range(len(da1))]
         dW1 = [[dz1[i] * x[j] for j in range(len(x))] for i in range(len(dz1))]
         
+        # 4. Update Weights & Biases (Gradient Descent)
+        # Update Layer 3
         for i in range(len(self.W3)):
             self.b3[i] -= lr * dz3[i]
-            for j in range(len(self.W3[0])): self.W3[i][j] -= lr * dW3[i][j]
+            for j in range(len(self.W3[0])): 
+                self.W3[i][j] -= lr * dW3[i][j]
+        # Update Layer 2
         for i in range(len(self.W2)):
             self.b2[i] -= lr * dz2[i]
-            for j in range(len(self.W2[0])): self.W2[i][j] -= lr * dW2[i][j]
+            for j in range(len(self.W2[0])): 
+                self.W2[i][j] -= lr * dW2[i][j]
+        # Update Layer 1
         for i in range(len(self.W1)):
             self.b1[i] -= lr * dz1[i]
-            for j in range(len(self.W1[0])): self.W1[i][j] -= lr * dW1[i][j]
+            for j in range(len(self.W1[0])): 
+                self.W1[i][j] -= lr * dW1[i][j]
 
     def save_to_json(self, path):
+        """Saves weights to a standard JSON file."""
         data = {"W1": self.W1, "b1": self.b1, "W2": self.W2, "b2": self.b2, "W3": self.W3, "b3": self.b3}
-        with open(path, 'w') as f: json.dump(data, f)
+        with open(path, 'w') as f: 
+            json.dump(data, f)
 
     def load_from_json(self, path):
-        with open(path, 'r') as f: data = json.load(f)
+        """Loads weights from a JSON file."""
+        with open(path, 'r') as f: 
+            data = json.load(f)
         self.W1, self.b1, self.W2, self.b2, self.W3, self.b3 = data["W1"], data["b1"], data["W2"], data["b2"], data["W3"], data["b3"]
 
-# 4. Progress Bar Utility
+# =============================================================================
+# 4. UTILITIES & UI
+# =============================================================================
+
 def print_progress(iteration, total, prefix='', suffix='', length=30, fill='█'):
+    """Custom progress bar to track training progress in CLI."""
     percent = ("{0:.1f}").format(100 * (iteration / float(total)))
     filled_length = int(length * iteration // total)
     bar = fill * filled_length + '-' * (length - filled_length)
     sys.stdout.write(f'\r{prefix} |{bar}| {percent}% {suffix}')
     sys.stdout.flush()
-    if iteration == total: sys.stdout.write('\n')
+    if iteration == total: 
+        sys.stdout.write('\n')
 
-# 5. UI and Training Loop
 def run_training(mlp, mode_name, num_samples, epochs):
+    """Orchestrates the training loop for the Pure Python model."""
     print(f"\n--- {mode_name.upper()} MODE ---")
     X, y = generate_data_py(num_samples)
     lr = 0.05
@@ -125,11 +211,13 @@ def run_training(mlp, mode_name, num_samples, epochs):
             if i % 100 == 0 or i == num_samples - 1:
                 print_progress(i + 1, num_samples, prefix=f'Epoch {epoch+1}/{epochs}', length=30)
         
-        # Accuracy check
+        # Validation accuracy check
         correct = 0
         test_size = min(200, num_samples)
         for i in range(test_size):
-            if [1 if v > 0.5 else 0 for v in mlp.forward(X[i])] == y[i]: correct += 1
+            pred = [1 if v > 0.5 else 0 for v in mlp.forward(X[i])]
+            if pred == y[i]: 
+                correct += 1
         
         elapsed = time.time() - epoch_start
         print(f"  Result: Acc {correct/test_size:.1%} | Time: {elapsed:.1f}s")
@@ -138,31 +226,41 @@ def run_training(mlp, mode_name, num_samples, epochs):
     mlp.save_to_json(WEIGHTS_JSON)
 
 def convert_from_numpy():
+    """Helper to load .npz weights (from sim_numpy.py) into JSON format."""
     try:
         import numpy as np
-    except:
-        print("Error: NumPy required.")
+    except ImportError:
+        print("Error: NumPy required for conversion.")
         return False
-    if not os.path.exists(NPZ_PATH): return False
+    
+    if not os.path.exists(NPZ_PATH): 
+        print("Error: No NumPy weights found.")
+        return False
+        
     data = np.load(NPZ_PATH)
+    # NumPy weights are (In, Out), we need (Out, In) for matrix_vector_mul
     weights = {
         "W1": data['W1'].T.tolist(), "b1": data['b1'].flatten().tolist(),
         "W2": data['W2'].T.tolist(), "b2": data['b2'].flatten().tolist(),
         "W3": data['W3'].T.tolist(), "b3": data['b3'].flatten().tolist()
     }
-    with open(WEIGHTS_JSON, 'w') as f: json.dump(weights, f)
-    print(f"Weights converted to {WEIGHTS_JSON}")
+    with open(WEIGHTS_JSON, 'w') as f: 
+        json.dump(weights, f)
+    print(f"Weights successfully converted to {WEIGHTS_JSON}")
     return True
 
 def run_interactive(mlp):
+    """Main CLI interaction loop."""
     op_names = ["AND", "OR", "XOR", "NAND", "NOR", "XNOR", "NOT A", "NOT B"]
     while True:
         print("\n" + "="*45 + "\n   8-BIT LOGIC GATE NEURAL SIMULATOR (Pure Python)\n" + "="*45)
-        for i, name in enumerate(op_names): print(f"  [{i}] {name}")
+        for i, name in enumerate(op_names): 
+            print(f"  [{i}] {name}")
         print("-" * 45)
         print("  [S] Slow Training (5k samples)")
         print("  [V] Very Slow Training (20k samples)")
-        if os.path.exists(NPZ_PATH): print("  [C] Convert from NumPy Weights")
+        if os.path.exists(NPZ_PATH): 
+            print("  [C] Convert from NumPy Weights")
         print("  [Q] Quit")
         print("="*45)
         
@@ -177,7 +275,8 @@ def run_interactive(mlp):
         if not (choice.isdigit() and 0 <= int(choice) <= 7): continue
         op_idx = int(choice)
         
-        def parse(p):
+        def parse_val(p):
+            """Internal parser for binary/hex/dec strings."""
             try:
                 if p.startswith('0b'): v = int(p, 2)
                 elif p.startswith('0x'): v = int(p, 16)
@@ -186,17 +285,25 @@ def run_interactive(mlp):
             except: return None
 
         a_bits, b_bits = None, None
-        while a_bits is None: a_bits = parse(input("Input A: "))
-        while b_bits is None: b_bits = parse(input("Input B: "))
+        while a_bits is None: a_bits = parse_val(input("Input A: "))
+        while b_bits is None: b_bits = parse_val(input("Input B: "))
         
+        # Inference
         input_data = a_bits + b_bits + [int(c) for c in format(op_idx, '03b')]
         pred_bits = [1 if x > 0.5 else 0 for x in mlp.forward(input_data)]
         pred_str = "".join(map(str, pred_bits))
-        print("-" * 40 + f"\n RESULT:  {pred_str} (Dec: {int(pred_str, 2)})\n" + "-" * 40)
+        
+        print("-" * 40)
+        print(f" RESULT:  {pred_str} (Dec: {int(pred_str, 2)})")
+        print("-" * 40)
 
 if __name__ == "__main__":
     mlp = PurePythonMLP()
+    # Attempt to load existing weights
     if os.path.exists(WEIGHTS_JSON):
         print(f"Loading weights from {WEIGHTS_JSON}...")
         mlp.load_from_json(WEIGHTS_JSON)
+    elif os.path.exists(NPZ_PATH):
+        print("Found NumPy weights. Run '[C] Convert' in the menu to use them.")
+        
     run_interactive(mlp)
