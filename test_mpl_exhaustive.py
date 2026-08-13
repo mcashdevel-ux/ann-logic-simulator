@@ -1,4 +1,4 @@
-﻿"""
+"""
 EXHAUSTIVE TEST SCRIPT FOR ALL SIMULATION BACKENDS
 =================================================
 Verifies every implementation against all possible inputs:
